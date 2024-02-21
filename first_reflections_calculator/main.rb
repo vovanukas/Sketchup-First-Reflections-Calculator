@@ -6,14 +6,10 @@ module VM
     class FirstReflectionsTool
       # Set-up instance variables when the tool is activated
       def activate
-        # Input Point is used to pick 3d point,
-        # which reside under the cursor
-        @mouse_ip = Sketchup::InputPoint.new
+        @mouse_ip = Sketchup::InputPoint.new         # Input Point is used to pick 3d point, which reside under the cursor
 
-        # Get active model and get entities class
-        # Needed to spawn CLines
-        @model = Sketchup.active_model
-        @entities = @model.entities
+        @model = Sketchup.active_model # Get active model
+        @entities = @model.entities # Get entities class; Needed to spawn CLines
       end
 
       # Method when user presses the Left Mouse Button
@@ -21,14 +17,20 @@ module VM
         @mouse_ip.pick(view, x, y) # Pick the 3D point below the cursor
 
         face = @mouse_ip.face # Get face that the cursor has been clicked on
-        # If the face exists add a CLine where the face is looking
-        if face
-          # Cast a ray through the model and return the first thing it hits
-          hit = @model.raytest(@mouse_ip.position, face.normal)
-          # Add a finite CLine from the mouse Input Point to rays first hit.
-          @entities.add_cline(@mouse_ip.position, hit[0])
-          print("Added CLine")
+        if face.nil?
+          UI.messagebox("Point must be on a face.")
+          return
         end
+
+        hit = @model.raytest(@mouse_ip.position, face.normal) # Cast a ray through the model and return the first thing it hits
+        if hit.nil?
+          UI.messagebox("Ray didn't hit anything.")
+          return
+        end
+
+
+        @entities.add_cline(@mouse_ip.position, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
+        puts("Added CLine")
       end
     end
 
