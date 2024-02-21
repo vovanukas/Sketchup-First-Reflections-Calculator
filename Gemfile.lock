@@ -1,0 +1,12 @@
+GEM
+  specs:
+    sketchup-api-stubs (0.7.9)
+
+PLATFORMS
+  x86_64-darwin-22
+
+DEPENDENCIES
+  sketchup-api-stubs
+
+BUNDLED WITH
+   2.4.10
