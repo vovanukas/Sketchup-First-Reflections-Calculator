@@ -22,12 +22,35 @@ module VM
           return
         end
 
-        hit = @model.raytest(@mouse_ip.position, face.normal) # Cast a ray through the model and return the first thing it hits
+        shoot_ray(face.normal)
+      end
+
+      def shoot_ray(normal)
+        mouse_position = @mouse_ip.position
+        target = mouse_position.offset(normal, 1.m)
+        direction = mouse_position.vector_to(target)
+
+        tr = Geom::Transformation.new(target, direction)
+
+        @entities.add_cline(@mouse_ip.position, target)
+
+        angle = rand * 2 * Math::PI
+
+        random_radius = 1.m * Math.sqrt( rand )
+
+        x = random_radius * Math.sin( angle )
+        y = random_radius * Math.cos( angle )
+
+        random_point = Geom::Point3d.new( x, y, 0 )
+        random_point.transform!( tr )
+
+        @entities.add_cpoint(random_point)
+
+        hit = @model.raytest(@mouse_ip.position, mouse_position.vector_to(random_point)) # Cast a ray through the model and return the first thing it hits
         if hit.nil?
-          UI.messagebox("Ray didn't hit anything.")
+          # UI.messagebox("Ray didn't hit anything.")
           return
         end
-
 
         @entities.add_cline(@mouse_ip.position, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
         puts("Added CLine")
