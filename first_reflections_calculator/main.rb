@@ -6,8 +6,8 @@ module VM
     class FirstReflectionsTool
       # Set-up instance variables when the tool is activated
       def activate
-        @mouse_ip = Sketchup::InputPoint.new         # Input Point is used to pick 3d point, which reside under the cursor
-
+        @mouse_ip = Sketchup::InputPoint.new # Input Point is used to pick 3d point, which reside under the cursor
+        @face = nil
         @model = Sketchup.active_model # Get active model
         @entities = @model.entities # Get entities class; Needed to spawn CLines
       end
@@ -16,43 +16,54 @@ module VM
       def onLButtonDown(flag, x, y, view)
         @mouse_ip.pick(view, x, y) # Pick the 3D point below the cursor
 
-        face = @mouse_ip.face # Get face that the cursor has been clicked on
-        if face.nil?
+        @face = @mouse_ip.face # Get face that the cursor has been clicked on
+        if @face.nil?
           UI.messagebox("Point must be on a face.")
           return
         end
 
-        shoot_ray(face.normal)
+        n_of_reflections = UI.inputbox(["How many rays do you want to cast?"], [20], "Number of rays.")[0]
+        calculate_first_reflections(n_of_reflections)
       end
 
-      def shoot_ray(normal)
-        mouse_position = @mouse_ip.position
-        target = mouse_position.offset(normal, 1.m)
-        direction = mouse_position.vector_to(target)
+      def calculate_first_reflections(n_of_reflections)
+        @model.start_operation('Calculate Reflections', true)
+        n_of_reflections.times do
+          shoot_ray(@face.normal, @mouse_ip.position)
+        end
+        @model.commit_operation
+      end
 
+      def shoot_ray(normal, source)
+        # Target - centre of the circle 1 meter away from the mouse position in the direction of the face normal
+        target = source.offset(normal, 1.m)
+        direction = source.vector_to(target)
+
+        #
         tr = Geom::Transformation.new(target, direction)
 
-        @entities.add_cline(@mouse_ip.position, target)
-
+        # Angle will hold a random angle in the range [0, 2π), which represents a full circle in radians
         angle = rand * 2 * Math::PI
 
-        random_radius = 1.m * Math.sqrt( rand )
+        # Calculate a random radius "slice" in a circle with 1m radius using a uniform formula
+        # http://www.anderswallin.net/2009/05/uniform-random-points-in-a-circle-using-polar-coordinates/
+        random_radius = 1.m * Math.sqrt(rand)
 
-        x = random_radius * Math.sin( angle )
-        y = random_radius * Math.cos( angle )
+        # Generate random 2D coordinates (x and y) that are evenly distributed around a circle with a radius of random_radius
+        x = random_radius * Math.sin(angle)
+        y = random_radius * Math.cos(angle)
 
-        random_point = Geom::Point3d.new( x, y, 0 )
-        random_point.transform!( tr )
+        random_point = Geom::Point3d.new(x, y, 0)
+        # Transform random_point to a new position relative to the target point and aligned with the direction vector
+        random_point.transform!(tr)
 
-        @entities.add_cpoint(random_point)
-
-        hit = @model.raytest(@mouse_ip.position, mouse_position.vector_to(random_point)) # Cast a ray through the model and return the first thing it hits
+        hit = @model.raytest(source, source.vector_to(random_point)) # Cast a ray through the model and return the first thing it hits
         if hit.nil?
           # UI.messagebox("Ray didn't hit anything.")
           return
         end
 
-        @entities.add_cline(@mouse_ip.position, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
+        @entities.add_cline(source, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
         puts("Added CLine")
       end
     end
