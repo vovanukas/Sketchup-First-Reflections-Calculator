@@ -29,12 +29,42 @@ module VM
       def calculate_first_reflections(n_of_reflections)
         @model.start_operation('Calculate Reflections', true)
         n_of_reflections.times do
-          shoot_ray(@face.normal, @mouse_ip.position)
+          position = @mouse_ip.position
+          random_starting_point = generate_random_point(@face.normal, position)
+
+          hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point))
+          if hit_point.nil?
+            next
+          end
+          # TODO: Add the ability to hit groups and components
+          normal = hit_components[0].normal  # find_face_based_on_point(hit_point, hit_components)
+          # TODO: Implement multiple reflection counts using recursion
+          reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), normal)
+          shoot_ray(hit_point, reflection_vector)
         end
         @model.commit_operation
       end
 
-      def shoot_ray(normal, source)
+      def calculate_reflection_vector(incident_vector, normal_vector)
+        incident_vector.normalize!
+        dot_product = incident_vector.dot(normal_vector)
+
+        normal_vector_dot_product = Geom::Vector3d.new(dot_product * normal_vector[0], dot_product * normal_vector[1], dot_product * normal_vector[2])
+
+        # return:
+        reflection = incident_vector - normal_vector_dot_product - normal_vector_dot_product
+      end
+
+      # TODO: If I hit a face in a group or component, I will need to go through every face in it and find which face I hit based on the point
+      def find_face_based_on_point(point, component)
+        component.definition.entities.grep(Sketchup::Face) do |face|
+          if face.bounds.contains?(point)
+            return face.normal
+          end
+        end
+      end
+
+      def generate_random_point(normal, source)
         # Target - centre of the circle 1 meter away from the mouse position in the direction of the face normal
         target = source.offset(normal, 1.m)
         direction = source.vector_to(target)
@@ -56,8 +86,10 @@ module VM
         random_point = Geom::Point3d.new(x, y, 0)
         # Transform random_point to a new position relative to the target point and aligned with the direction vector
         random_point.transform!(tr)
+      end
 
-        hit = @model.raytest(source, source.vector_to(random_point)) # Cast a ray through the model and return the first thing it hits
+      def shoot_ray(source, vector)
+        hit = @model.raytest(source, vector) # Cast a ray through the model and return the first thing it hits
         if hit.nil?
           # UI.messagebox("Ray didn't hit anything.")
           return
@@ -65,6 +97,8 @@ module VM
 
         @entities.add_cline(source, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
         puts("Added CLine")
+
+        return hit
       end
     end
 
@@ -90,14 +124,14 @@ module VM
       nil
     end
 
-    def self.activate_line_tool
+    def self.activate_reflections_tool
       Sketchup.active_model.select_tool(FirstReflectionsTool.new)
     end
 
     unless file_loaded?(__FILE__)
       menu = UI.menu('Plugins')
       menu.add_item('First Reflections Tool') {
-        self.activate_line_tool
+        self.activate_reflections_tool
       }
       file_loaded(__FILE__)
     end
