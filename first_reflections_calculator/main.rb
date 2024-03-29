@@ -22,27 +22,47 @@ module VM
           return
         end
 
-        n_of_reflections = UI.inputbox(["How many rays do you want to cast?"], [20], "Number of rays.")[0]
-        calculate_first_reflections(n_of_reflections)
+        user_input = UI.inputbox(["Number of Rays", "Number of Reflections"], [20, 2], "First Reflections Calculator")
+        n_of_rays = user_input[0]
+        n_of_reflections = user_input[1]
+
+        calculate_first_reflections(@mouse_ip.position ,n_of_rays, n_of_reflections)
       end
 
-      def calculate_first_reflections(n_of_reflections)
-        @model.start_operation('Calculate Reflections', true)
-        n_of_reflections.times do
-          position = @mouse_ip.position
-          random_starting_point = generate_random_point(@face.normal, position)
+      def calculate_first_reflections(position, n_of_rays, n_of_reflections, reflection_vector=nil)
+        if n_of_reflections > 0
+          if reflection_vector.nil?
+            @model.start_operation('Calculate Reflections', true)
+            n_of_rays.times do
+              puts("Inside for loop")
+              random_starting_point = generate_random_point(@face.normal, position)
+              hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point))
 
-          hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point))
-          if hit_point.nil?
-            next
+              if hit_point.nil?
+                next
+              end
+              puts(hit_components[0].class)
+              reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), hit_components[0].normal)
+              calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
+            end
+            @model.commit_operation
+          else
+            hit_point, hit_components = shoot_ray(position, reflection_vector)
+
+            if hit_point.nil?
+              return
+            end
+            reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), hit_components[0].normal)
+            shoot_ray(hit_point, reflection_vector)
+            calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
           end
-          # TODO: Add the ability to hit groups and components
-          normal = hit_components[0].normal  # find_face_based_on_point(hit_point, hit_components)
-          # TODO: Implement multiple reflection counts using recursion
-          reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), normal)
-          shoot_ray(hit_point, reflection_vector)
+        else
+          unless reflection_vector
+            return
+          end
+
+          shoot_ray(position, reflection_vector)
         end
-        @model.commit_operation
       end
 
       def calculate_reflection_vector(incident_vector, normal_vector)
@@ -50,7 +70,6 @@ module VM
         dot_product = incident_vector.dot(normal_vector)
 
         normal_vector_dot_product = Geom::Vector3d.new(dot_product * normal_vector[0], dot_product * normal_vector[1], dot_product * normal_vector[2])
-
         # return:
         reflection = incident_vector - normal_vector_dot_product - normal_vector_dot_product
       end
@@ -96,7 +115,6 @@ module VM
         end
 
         @entities.add_cline(source, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
-        puts("Added CLine")
 
         return hit
       end
