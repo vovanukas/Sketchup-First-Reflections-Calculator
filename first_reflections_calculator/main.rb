@@ -10,6 +10,7 @@ module VM
         @face = nil
         @model = Sketchup.active_model # Get active model
         @entities = @model.entities # Get entities class; Needed to spawn CLines
+        @reflections_folder = @model.layers.folders.find {|f| f.name == "Reflections | VMFRC" }
       end
 
       # Method when user presses the Left Mouse Button
@@ -20,6 +21,10 @@ module VM
         if @face.nil?
           UI.messagebox("Point must be on a face.")
           return
+        end
+
+        if @reflections_folder.nil?
+          @reflections_folder = @model.layers.add_folder("Reflections | VMFRC")
         end
 
         user_input = UI.inputbox(["Number of Rays", "Number of Reflections"], [20, 2], "First Reflections Calculator")
@@ -33,27 +38,34 @@ module VM
         if n_of_reflections > 0
           if reflection_vector.nil?
             @model.start_operation('Calculate Reflections', true)
+            @reflections_to_calculate = n_of_reflections
+
             n_of_rays.times do
-              puts("Inside for loop")
+              @current_layer = get_layer("Direct Sound")
+
               random_starting_point = generate_random_point(@face.normal, position)
-              hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point))
+              hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point), @current_layer)
 
               if hit_point.nil?
                 next
               end
-              puts(hit_components[0].class)
+
               reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), hit_components[0].normal)
               calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
             end
+
             @model.commit_operation
           else
-            hit_point, hit_components = shoot_ray(position, reflection_vector)
+            @current_layer = get_layer("#{@reflections_to_calculate - n_of_reflections} - Reflection")
+
+            hit_point, hit_components = shoot_ray(position, reflection_vector, @current_layer)
 
             if hit_point.nil?
               return
             end
+
             reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), hit_components[0].normal)
-            shoot_ray(hit_point, reflection_vector)
+            # shoot_ray(hit_point, reflection_vector)
             calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
           end
         else
@@ -61,7 +73,7 @@ module VM
             return
           end
 
-          shoot_ray(position, reflection_vector)
+          # shoot_ray(position, reflection_vector)
         end
       end
 
@@ -71,7 +83,7 @@ module VM
 
         normal_vector_dot_product = Geom::Vector3d.new(dot_product * normal_vector[0], dot_product * normal_vector[1], dot_product * normal_vector[2])
         # return:
-        reflection = incident_vector - normal_vector_dot_product - normal_vector_dot_product
+        reflection_vector = incident_vector - normal_vector_dot_product - normal_vector_dot_product
       end
 
       # TODO: If I hit a face in a group or component, I will need to go through every face in it and find which face I hit based on the point
@@ -107,16 +119,30 @@ module VM
         random_point.transform!(tr)
       end
 
-      def shoot_ray(source, vector)
+      def shoot_ray(source, vector, visualization_layer)
         hit = @model.raytest(source, vector) # Cast a ray through the model and return the first thing it hits
         if hit.nil?
           # UI.messagebox("Ray didn't hit anything.")
           return
         end
 
-        @entities.add_cline(source, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
+        visualisation = @entities.add_cline(source, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
+        puts(visualization_layer.display_name)
+        visualisation.layer = visualization_layer
 
         return hit
+      end
+
+      private
+
+      def get_layer(name)
+        current_layer = @reflections_folder.layers.find { |f| f.name == name }
+
+        if current_layer.nil?
+          current_layer = @model.layers.add_layer(name)
+          current_layer.folder = @reflections_folder
+        end
+        return current_layer
       end
     end
 
