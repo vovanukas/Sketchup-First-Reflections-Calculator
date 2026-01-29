@@ -1,7 +1,54 @@
 require 'sketchup.rb'
+require 'json'
+require 'time'
 
 module VM
   module FirstReflectionsCalculator
+
+    def self.get_user_id
+      @user_id ||= begin
+        id = Sketchup.read_default("VM_FirstReflectionsCalculator", "UserID")
+        if id.nil?
+          # Generate a simple unique ID (random hex)
+          id = Array.new(16) { rand(256) }.pack('C*').unpack('H*').first
+          Sketchup.write_default("VM_FirstReflectionsCalculator", "UserID", id)
+        end
+        id
+      end
+    end
+
+    def self.capture_event(event, properties = {})
+      user_id = self.get_user_id
+            
+      # Obfuscated API Key
+      encoded_key = "cGhjX0xoUUZyZzhvYVFNTlRkcEdKUGljNFg1bFFRdnIyNjg5WlNUSkd2UnpFY2k="
+      api_key = encoded_key.unpack1('m')
+      
+      # Use Sketchup's built-in HTTP request
+      url = "https://eu.i.posthog.com/capture/"
+      request = Sketchup::Http::Request.new(url, Sketchup::Http::POST)
+      
+      data = {
+        api_key: api_key,
+        event: event,
+        properties: properties.merge({
+          distinct_id: user_id,
+          plugin_version: PLUGIN_VERSION,
+          sketchup_version: Sketchup.version,
+          "$process_person_profile": false # Disabled personal profile collection
+        }),
+        timestamp: Time.now.iso8601
+      }
+      
+      request.headers = { "Content-Type" => "application/json" }
+      request.body = data.to_json
+      
+      request.start do |req, res|
+        # puts "PostHog event sent: #{event} (Status: #{res.status_code})"
+      end
+    rescue => e
+      puts "PostHog capture error: #{e.message}"
+    end
 
     class FirstReflectionsTool
       # Set-up instance variables when the tool is activated
@@ -11,6 +58,7 @@ module VM
         @model = Sketchup.active_model # Get active model
         @entities = @model.entities # Get entities class; Needed to spawn CLines
         @reflections_folder = @model.layers.folders.find {|f| f.name == "Reflections | VMFRC" }
+        @dialog = nil
       end
 
       # Method when user presses the Left Mouse Button
@@ -23,25 +71,73 @@ module VM
           return
         end
 
-        if @reflections_folder.nil?
-          @reflections_folder = @model.layers.add_folder("Reflections | VMFRC")
+        @clicked_position = @mouse_ip.position
+        show_dialog
+      end
+
+      def show_dialog
+        if @dialog && @dialog.visible?
+          @dialog.bring_to_front
+          return
         end
 
-        user_input = UI.inputbox(["Number of Rays", "Number of Reflections"], [20, 2], "First Reflections Calculator")
-        n_of_rays = user_input[0]
-        n_of_reflections = user_input[1]
+        @dialog = UI::HtmlDialog.new({
+          :dialog_title => "First Reflections Calculator",
+          :preferences_key => "com.vm.firstreflections",
+          :scrollable => false,
+          :resizable => true, # Allow resizing for auto-fit
+          :width => 300,
+          :height => 350,
+          :style => UI::HtmlDialog::STYLE_DIALOG
+        })
 
-        calculate_first_reflections(@mouse_ip.position ,n_of_rays, n_of_reflections)
+        html_path = File.join(PATH, 'dialog.html')
+        @dialog.set_file(html_path)
+
+        @dialog.add_action_callback("resize") do |action_context, width, height|
+          # Use set_size to match content height, adding a small buffer
+          @dialog.set_size(width, height + 40)
+        end
+
+        @dialog.add_action_callback("callback") do |action_context, type, data|
+          case type
+          when "ok"
+            n_of_rays = data["rays"].to_i
+            n_of_reflections = data["reflections"].to_i
+            
+            @dialog.close
+            calculate_first_reflections(@clicked_position, n_of_rays, n_of_reflections)
+          when "cancel"
+            @dialog.close
+          when "learnmore"
+            VM::FirstReflectionsCalculator.capture_event('learn_more_clicked')
+            UI.openURL("https://tally.so/r/WOrx8J")
+          end
+        end
+
+        @dialog.show
       end
 
       def calculate_first_reflections(position, n_of_rays, n_of_reflections, reflection_vector=nil)
         if n_of_reflections > 0
           if reflection_vector.nil?
+            # Track calculation start
+            VM::FirstReflectionsCalculator.capture_event('calculation_started', {
+              rays: n_of_rays,
+              reflections: n_of_reflections
+            })
+
             @model.start_operation('Calculate Reflections', true)
+
+            # Ensure folder exists (handles deleted/undone folders)
+            get_reflections_folder
+
             @reflections_to_calculate = n_of_reflections
 
             n_of_rays.times do
               @current_layer = get_layer("Direct Sound")
+              viz_color = Sketchup::Color.new(255,0,0)
+              @current_layer.color = viz_color
 
               random_starting_point = generate_random_point(@face.normal, position)
               hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point), @current_layer)
@@ -50,13 +146,30 @@ module VM
                 next
               end
 
-              reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), hit_components[0].normal)
+              hit_entity = hit_components[0]
+              
+              # Get the normal - handle different entity types
+              if hit_entity.is_a?(Sketchup::Face)
+                normal = hit_entity.normal
+              elsif hit_entity.respond_to?(:definition)
+                # It's a Group or ComponentInstance - need to find the actual face
+                normal = find_face_based_on_point(hit_point, hit_entity)
+                next if normal.nil?
+              else
+                next
+              end
+              
+              reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), normal)
+              next if reflection_vector.length < 0.001
+              
               calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
             end
 
             @model.commit_operation
           else
             @current_layer = get_layer("#{@reflections_to_calculate - n_of_reflections} - Reflection")
+            viz_color = Sketchup::Color.new( (255 / @reflections_to_calculate) * (n_of_reflections - 1), 0, ( 255 / @reflections_to_calculate) * n_of_reflections)
+            @current_layer.color = viz_color
 
             hit_point, hit_components = shoot_ray(position, reflection_vector, @current_layer)
 
@@ -64,8 +177,19 @@ module VM
               return
             end
 
-            reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), hit_components[0].normal)
-            # shoot_ray(hit_point, reflection_vector)
+            hit_entity = hit_components[0]
+            
+            # Get the normal - handle different entity types
+            if hit_entity.is_a?(Sketchup::Face)
+              normal = hit_entity.normal
+            elsif hit_entity.respond_to?(:definition)
+              normal = find_face_based_on_point(hit_point, hit_entity)
+              return if normal.nil?
+            else
+              return
+            end
+            
+            reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), normal)
             calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
           end
         else
@@ -86,13 +210,38 @@ module VM
         reflection_vector = incident_vector - normal_vector_dot_product - normal_vector_dot_product
       end
 
-      # TODO: If I hit a face in a group or component, I will need to go through every face in it and find which face I hit based on the point
+      # If we hit a face in a group or component, find the actual face based on the hit point
       def find_face_based_on_point(point, component)
-        component.definition.entities.grep(Sketchup::Face) do |face|
-          if face.bounds.contains?(point)
-            return face.normal
+        # Transform the global point to local coordinates of the component
+        local_point = point.transform(component.transformation.inverse)
+        
+        faces = component.definition.entities.grep(Sketchup::Face)
+        
+        faces.each do |face|
+          # Check if the point lies on this face (within a small tolerance)
+          if face.classify_point(local_point) >= 1 && face.classify_point(local_point) <= 4
+            # Transform the normal back to global coordinates
+            return face.normal.transform(component.transformation)
           end
         end
+        
+        # Fallback: find the closest face
+        closest_face = nil
+        min_distance = Float::INFINITY
+        
+        faces.each do |face|
+          # Get distance from point to face plane
+          plane = face.plane
+          distance = (plane[0] * local_point.x + plane[1] * local_point.y + plane[2] * local_point.z + plane[3]).abs
+          if distance < min_distance
+            min_distance = distance
+            closest_face = face
+          end
+        end
+        
+        return closest_face.normal.transform(component.transformation) if closest_face
+        
+        nil
       end
 
       def generate_random_point(normal, source)
@@ -122,12 +271,10 @@ module VM
       def shoot_ray(source, vector, visualization_layer)
         hit = @model.raytest(source, vector) # Cast a ray through the model and return the first thing it hits
         if hit.nil?
-          # UI.messagebox("Ray didn't hit anything.")
           return
         end
 
         visualisation = @entities.add_cline(source, hit[0]) # Add a finite CLine from the mouse Input Point to rays first hit.
-        puts(visualization_layer.display_name)
         visualisation.layer = visualization_layer
 
         return hit
@@ -135,12 +282,35 @@ module VM
 
       private
 
+      def get_reflections_folder
+        # Always check if the folder still exists and is valid
+        # (it may have been deleted by Undo or manually)
+        begin
+          if @reflections_folder && @reflections_folder.valid?
+            return @reflections_folder
+          end
+        rescue TypeError
+          # Reference was deleted
+        end
+        
+        # Try to find existing folder
+        @reflections_folder = @model.layers.folders.find { |f| f.name == "Reflections | VMFRC" }
+        
+        # Create if it doesn't exist
+        if @reflections_folder.nil?
+          @reflections_folder = @model.layers.add_folder("Reflections | VMFRC")
+        end
+        
+        @reflections_folder
+      end
+
       def get_layer(name)
-        current_layer = @reflections_folder.layers.find { |f| f.name == name }
+        folder = get_reflections_folder
+        current_layer = folder.layers.find { |f| f.name == name }
 
         if current_layer.nil?
           current_layer = @model.layers.add_layer(name)
-          current_layer.folder = @reflections_folder
+          current_layer.folder = folder
         end
         return current_layer
       end
@@ -156,8 +326,28 @@ module VM
       # Hide warnings for already defined constants.
       verbose = $VERBOSE
       $VERBOSE = nil
-      Dir.glob(File.join(PATH_ROOT, "**/*.{rb,rbe}")).each { |f| load(f) }
-      $VERBOSE = verbose
+      begin
+        # Reload the loader file
+        loader = File.join(PATH_ROOT, FILENAMESPACE + '.rb')
+        load(loader) if File.exist?(loader)
+
+        # Reload all files in the plugin subfolder
+        pattern = File.join(PATH, "**/*.{rb,rbe}")
+        files = Dir.glob(pattern)
+        files.each do |f|
+          begin
+            load(f)
+          rescue Exception => e
+            puts "Error loading #{f}: #{e.message}"
+            puts e.backtrace
+          end
+        end
+      rescue Exception => e
+        puts "Error in reload: #{e.message}"
+        puts e.backtrace
+      ensure
+        $VERBOSE = verbose
+      end
 
       # Use a timer to make call to method itself register to console.
       # Otherwise the user cannot use up arrow to repeat command.
@@ -169,6 +359,7 @@ module VM
     end
 
     def self.activate_reflections_tool
+      self.capture_event('tool_activated')
       Sketchup.active_model.select_tool(FirstReflectionsTool.new)
     end
 

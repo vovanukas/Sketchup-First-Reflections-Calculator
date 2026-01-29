@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    :root {
+      --primary-color: #2c3e50;
+      --accent-color: #3498db;
+      --bg-color: #f8f9fa;
+      --text-color: #333;
+      --border-color: #dcdde1;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      padding: 16px;
+      margin: 0;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      overflow: hidden;
+    }
+
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    h2 {
+      margin: 0 0 8px 0;
+      font-size: 1.2rem;
+      font-weight: 600;
+      color: var(--primary-color);
+    }
+
+    .input-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 0.9rem;
+      font-weight: 500;
+      color: #666;
+    }
+
+    input {
+      width: 100%;
+      padding: 10px;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      font-size: 1rem;
+      box-sizing: border-box;
+      transition: border-color 0.2s;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: var(--accent-color);
+    }
+
+    .learn-more {
+      padding-top: 16px;
+      border-top: 1px solid var(--border-color);
+      text-align: center;
+    }
+
+    .learn-more-text {
+      font-size: 0.85rem;
+      color: #7f8c8d;
+      margin-bottom: 8px;
+    }
+
+    .learn-more-link {
+      color: var(--accent-color);
+      text-decoration: none;
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-block;
+      padding: 6px 16px;
+      border: 1.5px solid var(--accent-color);
+      border-radius: 20px;
+      transition: all 0.2s;
+    }
+
+    .learn-more-link:hover {
+      background: var(--accent-color);
+      color: white;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    button {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+
+    button:active {
+      transform: translateY(1px);
+    }
+
+    .btn-ok {
+      background-color: var(--primary-color);
+      color: white;
+    }
+
+    .btn-cancel {
+      background-color: #eee;
+      color: #666;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>First Reflections Tool</h2>
+    
+    <div class="input-group">
+      <label for="rays">Number of Rays</label>
+      <input type="number" id="rays" value="20" min="1" step="1">
+    </div>
+
+    <div class="input-group">
+      <label for="reflections">Reflection Order</label>
+      <input type="number" id="reflections" value="2" min="1" step="1">
+    </div>
+
+    <div class="learn-more">
+      <div class="learn-more-text">Interested in more tools for Acoustics?</div>
+      <a class="learn-more-link" onclick="learnMore()">LEARN MORE</a>
+    </div>
+
+    <div class="footer">
+      <button class="btn-cancel" onclick="cancel()">Cancel</button>
+      <button class="btn-ok" onclick="ok()">Calculate</button>
+    </div>
+  </div>
+
+  <script>
+    function ok() {
+      const rays = parseInt(document.getElementById('rays').value);
+      const reflections = parseInt(document.getElementById('reflections').value);
+      
+      if (isNaN(rays) || rays < 1) {
+        alert("Please enter a valid number of rays (min 1)");
+        return;
+      }
+      if (isNaN(reflections) || reflections < 1) {
+        alert("Please enter a valid number of reflections (min 1)");
+        return;
+      }
+
+      sketchup.callback('ok', {
+        rays: rays,
+        reflections: reflections
+      });
+    }
+
+    function cancel() {
+      sketchup.callback('cancel');
+    }
+
+    function learnMore() {
+      sketchup.callback('learnmore');
+    }
+
+    // Function to notify SketchUp of the content height
+    function updateSize() {
+      const height = document.querySelector('.container').offsetHeight;
+      const width = document.querySelector('.container').offsetWidth;
+      sketchup.resize(300, height); // Keep width fixed at 300
+    }
+
+    // Initialize
+    window.onload = () => {
+      const raysInput = document.getElementById('rays');
+      raysInput.focus();
+      raysInput.select();
+
+      // Enter key support
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') ok();
+        if (e.key === 'Escape') cancel();
+      });
+
+      // Initial size update
+      setTimeout(updateSize, 100);
+    };
+  </script>
+</body>
+</html>
