@@ -11,7 +11,7 @@ module VM
       # Plugin information
       PLUGIN_ID       = 'VM_FirstReflectionsCalculator'.freeze
       PLUGIN_NAME     = 'First Reflections Calculator'.freeze
-      PLUGIN_VERSION  = '1.0.0'.freeze
+      PLUGIN_VERSION  = '1.1.0'.freeze
 
       # Resource paths
       FILENAMESPACE = File.basename( __FILE__, '.rb' )
@@ -26,7 +26,7 @@ module VM
         ex = SketchupExtension.new( PLUGIN_NAME, loader )
         ex.description = 'Calculate First Reflections Using Raytracing.'
         ex.version     = PLUGIN_VERSION
-        ex.copyright   = 'Vladimiras Malyskinas 2024'
+        ex.copyright   = 'Vladimiras Malyskinas 2026'
         ex.creator     = 'Vladimiras Malyskinas'
         Sketchup.register_extension( ex, true )
       end
