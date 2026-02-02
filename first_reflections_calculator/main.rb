@@ -51,6 +51,11 @@ module VM
     end
 
     class FirstReflectionsTool
+      ARROW_LENGTH = 16  # Length of the direction arrow in inches
+      ARROW_HEAD_LENGTH = 5  # Length of the cone arrowhead
+      ARROW_HEAD_RADIUS = 2.5  # Radius of the cone base
+      CONE_SEGMENTS = 12  # Number of segments for the cone (smoother = more)
+      
       # Set-up instance variables when the tool is activated
       def activate
         @mouse_ip = Sketchup::InputPoint.new # Input Point is used to pick 3d point, which reside under the cursor
@@ -59,6 +64,89 @@ module VM
         @entities = @model.entities # Get entities class; Needed to spawn CLines
         @reflections_folder = @model.layers.folders.find {|f| f.name == "Reflections | VMFRC" }
         @dialog = nil
+        
+        # For cursor visualization
+        @hover_position = nil
+        @hover_normal = nil
+        
+        Sketchup.status_text = "Click on a face to calculate reflections"
+      end
+      
+      def deactivate(view)
+        view.invalidate  # Clean up any drawing
+      end
+      
+      # Track mouse movement to show direction arrow
+      def onMouseMove(flags, x, y, view)
+        @mouse_ip.pick(view, x, y)
+        
+        face = @mouse_ip.face
+        if face
+          @hover_position = @mouse_ip.position
+          # Transform normal to global coordinates (handles faces inside groups/components)
+          @hover_normal = face.normal.transform(@mouse_ip.transformation)
+        else
+          @hover_position = nil
+          @hover_normal = nil
+        end
+        
+        view.invalidate  # Request a redraw
+      end
+      
+      # Draw the direction arrow overlay
+      def draw(view)
+        return unless @hover_position && @hover_normal
+        
+        # The cone starts where the shaft ends
+        cone_base_point = @hover_position.offset(@hover_normal, ARROW_LENGTH - ARROW_HEAD_LENGTH)
+        cone_tip = @hover_position.offset(@hover_normal, ARROW_LENGTH)
+        
+        # Draw the main arrow shaft (line from origin to cone base)
+        view.line_stipple = ''  # Solid line
+        view.line_width = 2
+        view.drawing_color = Sketchup::Color.new(220, 60, 60)  # Slightly softer red
+        view.draw_line(@hover_position, cone_base_point)
+        
+        # Draw the cone arrowhead
+        draw_cone(view, cone_base_point, cone_tip, @hover_normal)
+      end
+      
+      # Draw a filled cone arrowhead
+      def draw_cone(view, base_center, tip, direction)
+        # Create perpendicular vectors for the cone base circle
+        if direction.parallel?(Z_AXIS)
+          perp1 = X_AXIS.clone
+        else
+          perp1 = direction.cross(Z_AXIS)
+        end
+        perp1.normalize!
+        perp2 = direction.cross(perp1)
+        perp2.normalize!
+        
+        # Generate points around the base circle
+        base_points = []
+        CONE_SEGMENTS.times do |i|
+          angle = (2 * Math::PI * i) / CONE_SEGMENTS
+          offset1 = Geom::Vector3d.new(
+            perp1.x * Math.cos(angle) + perp2.x * Math.sin(angle),
+            perp1.y * Math.cos(angle) + perp2.y * Math.sin(angle),
+            perp1.z * Math.cos(angle) + perp2.z * Math.sin(angle)
+          )
+          base_points << base_center.offset(offset1, ARROW_HEAD_RADIUS)
+        end
+        
+        # Draw the cone surface as triangles (tip to each edge segment)
+        view.drawing_color = Sketchup::Color.new(255, 80, 80)  # Bright red for cone
+        
+        CONE_SEGMENTS.times do |i|
+          next_i = (i + 1) % CONE_SEGMENTS
+          triangle = [tip, base_points[i], base_points[next_i]]
+          view.draw(GL_TRIANGLES, triangle)
+        end
+        
+        # Draw the base cap
+        view.drawing_color = Sketchup::Color.new(180, 50, 50)  # Darker red for base
+        view.draw(GL_POLYGON, base_points)
       end
 
       # Method when user presses the Left Mouse Button
@@ -72,6 +160,8 @@ module VM
         end
 
         @clicked_position = @mouse_ip.position
+        # Store the face normal in global coordinates (handles faces inside groups/components)
+        @clicked_face_normal = @face.normal.transform(@mouse_ip.transformation)
         show_dialog
       end
 
@@ -139,25 +229,16 @@ module VM
               viz_color = Sketchup::Color.new(255,0,0)
               @current_layer.color = viz_color
 
-              random_starting_point = generate_random_point(@face.normal, position)
+              random_starting_point = generate_random_point(@clicked_face_normal, position)
               hit_point, hit_components = shoot_ray(position, position.vector_to(random_starting_point), @current_layer)
 
               if hit_point.nil?
                 next
               end
 
-              hit_entity = hit_components[0]
-              
-              # Get the normal - handle different entity types
-              if hit_entity.is_a?(Sketchup::Face)
-                normal = hit_entity.normal
-              elsif hit_entity.respond_to?(:definition)
-                # It's a Group or ComponentInstance - need to find the actual face
-                normal = find_face_based_on_point(hit_point, hit_entity)
-                next if normal.nil?
-              else
-                next
-              end
+              # Get the normal from the hit path, properly transformed to global coordinates
+              normal = get_normal_from_hit_path(hit_components)
+              next if normal.nil?
               
               reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), normal)
               next if reflection_vector.length < 0.001
@@ -177,17 +258,9 @@ module VM
               return
             end
 
-            hit_entity = hit_components[0]
-            
-            # Get the normal - handle different entity types
-            if hit_entity.is_a?(Sketchup::Face)
-              normal = hit_entity.normal
-            elsif hit_entity.respond_to?(:definition)
-              normal = find_face_based_on_point(hit_point, hit_entity)
-              return if normal.nil?
-            else
-              return
-            end
+            # Get the normal from the hit path, properly transformed to global coordinates
+            normal = get_normal_from_hit_path(hit_components)
+            return if normal.nil?
             
             reflection_vector = calculate_reflection_vector(position.vector_to(hit_point), normal)
             calculate_first_reflections(hit_point, n_of_rays, n_of_reflections - 1, reflection_vector)
@@ -210,36 +283,50 @@ module VM
         reflection_vector = incident_vector - normal_vector_dot_product - normal_vector_dot_product
       end
 
-      # If we hit a face in a group or component, find the actual face based on the hit point
-      def find_face_based_on_point(point, component)
-        # Transform the global point to local coordinates of the component
-        local_point = point.transform(component.transformation.inverse)
+      # Get the normal from a raytest hit path, properly transformed to global coordinates
+      def get_normal_from_hit_path(hit_path)
+        # The last element in the path is typically the face we hit
+        # The preceding elements are groups/components we passed through
         
-        faces = component.definition.entities.grep(Sketchup::Face)
-        
-        faces.each do |face|
-          # Check if the point lies on this face (within a small tolerance)
-          if face.classify_point(local_point) >= 1 && face.classify_point(local_point) <= 4
-            # Transform the normal back to global coordinates
-            return face.normal.transform(component.transformation)
+        # Compute cumulative transformation from all parent entities
+        cumulative_transform = Geom::Transformation.new
+        hit_path.each do |entity|
+          if entity.respond_to?(:transformation)
+            cumulative_transform = cumulative_transform * entity.transformation
           end
         end
         
-        # Fallback: find the closest face
-        closest_face = nil
-        min_distance = Float::INFINITY
+        # Find the face in the path
+        face = hit_path.find { |e| e.is_a?(Sketchup::Face) }
         
-        faces.each do |face|
-          # Get distance from point to face plane
-          plane = face.plane
-          distance = (plane[0] * local_point.x + plane[1] * local_point.y + plane[2] * local_point.z + plane[3]).abs
-          if distance < min_distance
-            min_distance = distance
-            closest_face = face
-          end
+        if face
+          # Transform the face normal to global coordinates
+          return face.normal.transform(cumulative_transform)
         end
         
-        return closest_face.normal.transform(component.transformation) if closest_face
+        # If no face in path, the first entity might be a group/component
+        # Try to find the face using the old method as fallback
+        first_entity = hit_path[0]
+        if first_entity.respond_to?(:definition)
+          return find_face_in_component(hit_path)
+        end
+        
+        nil
+      end
+      
+      # Fallback: find face in a component hierarchy based on the hit path
+      def find_face_in_component(hit_path)
+        # Build cumulative transformation
+        cumulative_transform = Geom::Transformation.new
+        
+        hit_path.each do |entity|
+          next unless entity.respond_to?(:transformation)
+          cumulative_transform = cumulative_transform * entity.transformation
+          
+          # Search for faces in this entity's definition
+          faces = entity.definition.entities.grep(Sketchup::Face)
+          return faces.first.normal.transform(cumulative_transform) if faces.any?
+        end
         
         nil
       end

@@ -11,7 +11,7 @@ module VM
       # Plugin information
       PLUGIN_ID       = 'VM_FirstReflectionsCalculator'.freeze
       PLUGIN_NAME     = 'First Reflections Calculator'.freeze
-      PLUGIN_VERSION  = '1.1.0'.freeze
+      PLUGIN_VERSION  = '1.2.0'.freeze
 
       # Resource paths
       FILENAMESPACE = File.basename( __FILE__, '.rb' )
